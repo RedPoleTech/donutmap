@@ -255,13 +255,89 @@ function quantize(rgb, pal, method) {
     return out
 }
 // ---- Pipeline-Schritte auf 128x128 ----
-function posterize(rgb, levels) {
-    const s = 255 / (levels - 1);
-    for (let i = 0; i < rgb.length; i++) rgb[i] = Math.round(rgb[i] / s) * s
+function posterize(rgb, colorCount) {
+    const pixelCount = rgb.length / 3,
+        centers = [],
+        nearestDistance = new Float32Array(pixelCount).fill(Infinity),
+        average = [0, 0, 0];
+    for (let i = 0; i < pixelCount; i++)
+        for (let channel = 0; channel < 3; channel++) average[channel] += rgb[i * 3 + channel] / pixelCount;
+    centers.push(average);
+    while (centers.length < Math.min(colorCount, pixelCount)) {
+        const center = centers[centers.length - 1];
+        let farthest = -1,
+            farthestDistance = 0;
+        for (let i = 0; i < pixelCount; i++) {
+            const offset = i * 3,
+                red = rgb[offset] - center[0],
+                green = rgb[offset + 1] - center[1],
+                blue = rgb[offset + 2] - center[2],
+                distance = red * red + green * green + blue * blue;
+            if (distance < nearestDistance[i]) nearestDistance[i] = distance;
+            if (nearestDistance[i] > farthestDistance) {
+                farthestDistance = nearestDistance[i];
+                farthest = i
+            }
+        }
+        if (farthest < 0 || farthestDistance === 0) break;
+        const offset = farthest * 3;
+        centers.push([rgb[offset], rgb[offset + 1], rgb[offset + 2]])
+    }
+
+    const assignments = new Uint8Array(pixelCount);
+    for (let iteration = 0; iteration < 8; iteration++) {
+        const sums = centers.map(() => [0, 0, 0]),
+            counts = new Uint32Array(centers.length);
+        for (let i = 0; i < pixelCount; i++) {
+            const offset = i * 3;
+            let best = 0,
+                bestDistance = Infinity;
+            for (let j = 0; j < centers.length; j++) {
+                const red = rgb[offset] - centers[j][0],
+                    green = rgb[offset + 1] - centers[j][1],
+                    blue = rgb[offset + 2] - centers[j][2],
+                    distance = red * red + green * green + blue * blue;
+                if (distance < bestDistance) {
+                    bestDistance = distance;
+                    best = j
+                }
+            }
+            assignments[i] = best;
+            counts[best]++;
+            for (let channel = 0; channel < 3; channel++) sums[best][channel] += rgb[offset + channel]
+        }
+        let changed = false;
+        for (let j = 0; j < centers.length; j++) {
+            if (!counts[j]) continue;
+            for (let channel = 0; channel < 3; channel++) {
+                const next = sums[j][channel] / counts[j];
+                if (Math.abs(next - centers[j][channel]) > 0.01) changed = true;
+                centers[j][channel] = next
+            }
+        }
+        if (!changed) break
+    }
+    for (let i = 0; i < pixelCount; i++)
+        for (let channel = 0; channel < 3; channel++) rgb[i * 3 + channel] = centers[assignments[i]][channel]
 }
 
-function threeColor(rgb, cols, bal, method) { // Balance verschiebt Luminanzgrenzen; Ergebnis enthält nur die 3 Farben
-    const sorted = cols.map(hex).sort((a, b) => a[0] * .3 + a[1] * .59 + a[2] * .11 - (b[0] * .3 + b[1] * .59 + b[2] * .11));
+function threeColor(rgb, cols, bal, method) {
+    const snapped = cols.map(color => {
+        const desired = hex(color);
+        let best = 0,
+            bestDistance = Infinity;
+        PAL.forEach((block, i) => {
+            const distance = distFn(desired, block.rgb);
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                best = i
+            }
+        });
+        return {
+            rgb: PAL[best].rgb,
+            bi: PAL[best].bi
+        }
+    }).sort((a, b) => a.rgb[0] * .3 + a.rgb[1] * .59 + a.rgb[2] * .11 - (b.rgb[0] * .3 + b.rgb[1] * .59 + b.rgb[2] * .11));
     const g = new Float32Array(rgb.length),
         sh = bal * 1.28;
     for (let i = 0; i < N * N; i++) {
@@ -274,9 +350,12 @@ function threeColor(rgb, cols, bal, method) { // Balance verschiebt Luminanzgren
         idx = quantize(g, gp, method),
         res = new Float32Array(rgb.length);
     idx.forEach((q, i) => {
-        res.set(sorted[q], i * 3)
+        res.set(snapped[q].rgb, i * 3)
     });
-    return res
+    return {
+        rgb: res,
+        active: new Set(snapped.map(color => color.bi))
+    }
 }
 // ---- Budget fitting ----
 const budgetValue = () => {
@@ -371,11 +450,11 @@ function assess(hist, D, set) {
     }
 }
 
-function growTo(set, hist, D, size) {
+function growTo(set, hist, D, size, candidates) {
     while (set.size < size) {
         let best = -1,
             be = Infinity;
-        BLOCKS.forEach((_, b) => {
+        candidates.forEach(b => {
             if (set.has(b)) return;
             const e = assess(hist, D, new Set([...set, b])).err;
             if (e < be) {
@@ -405,7 +484,7 @@ function dropCheapestLoss(set, hist, D) {
     set.delete(best)
 }
 // Hill climbing: add/swap blocks while the (estimated) price stays within budget and the match error shrinks
-function improve(set, hist, D, budget) {
+function improve(set, hist, D, budget, candidates) {
     for (let step = 0; step < CFG.budget.maxSteps; step++) {
         const cur = assess(hist, D, set);
         let best = null;
@@ -417,7 +496,7 @@ function improve(set, hist, D, budget) {
                 price: a.price
             }
         };
-        BLOCKS.forEach((_, b) => {
+        candidates.forEach(b => {
             if (set.has(b)) return;
             consider(new Set([...set, b]));
             for (const a of set) {
@@ -476,9 +555,10 @@ function fitToBudget(input, method, budget, uniform, ref) {
     method = uniform ? "none" : method; // a single-color image must not be dithered into a second block
     const in0 = input(method),
         rgb = in0.rgb,
+        allowed = in0.active || new Set(BLOCKS.map((_, i) => i)),
         hist = histogram(rgb),
         D = BLOCKS.map((_, b) => Float64Array.from(hist, h => matchDist(PAL[b], h.rgb)));
-    let r = run(rgb, in0.m, new Set(BLOCKS.map((_, i) => i)));
+    let r = run(rgb, in0.m, allowed);
     const used = new Set();
     r.counts.forEach((n, i) => used.add(i));
     const info = {
@@ -489,7 +569,7 @@ function fitToBudget(input, method, budget, uniform, ref) {
         switched: false
     };
     if (info.forced) {
-        growTo(used, hist, D, minB);
+        growTo(used, hist, D, minB, allowed);
         r = run(rgb, in0.m, used, minB)
     }
     if (!budget || r.price.cust <= budget) return {
@@ -500,12 +580,12 @@ function fitToBudget(input, method, budget, uniform, ref) {
     };
     if (!uniform) { // 1st remedy: another dithering mode may need fewer / cheaper blocks -> keep the best-looking one that fits
         const A = boxBlur(ref),
-            all = new Set(BLOCKS.map((_, i) => i));
+            all = allowed;
         let best = null;
         for (const m of METHODS) {
             if (m === method) continue;
             const im = input(m),
-                rm = run(im.rgb, im.m, all);
+                rm = run(im.rgb, im.m, im.active || all);
             if (rm.price.cust > budget || rm.counts.filter(n => n > 0).length < minB) continue;
             const e = lowpassError(A, rm);
             if (!best || e < best.e) best = {
@@ -526,7 +606,7 @@ function fitToBudget(input, method, budget, uniform, ref) {
     }
     let set = new Set(used); // 2nd remedy: fewer block types
     while (set.size > minB && assess(hist, D, set).price > budget) dropCheapestLoss(set, hist, D);
-    set = improve(set, hist, D, budget);
+    set = improve(set, hist, D, budget, allowed);
     r = run(rgb, in0.m, set, minB);
     while (set.size > minB && r.price.cust > budget) {
         dropCheapestLoss(set, hist, D);
@@ -642,7 +722,7 @@ function process() {
     if ($("pe").checked) posterize(rgb, +$("pl").value);
     const base = rgb,
         input = m => $("c3").checked ? {
-            rgb: threeColor(base, [$("k1").value, $("k2").value, $("k3").value], +$("bal").value, m),
+            ...threeColor(base, [$("k1").value, $("k2").value, $("k3").value], +$("bal").value, m),
             m: "none"
         } : {
             rgb: base,
