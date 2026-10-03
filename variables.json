@@ -1,0 +1,61 @@
+{
+  "site": {
+    "name": "Donutmap",
+    "discord": "InsideyourPC",
+    "description": "We build your Maparts on DonutSMP for you, plan here, see what you get and order over Discord!"
+  },
+  "map": {
+    "size": 128,
+    "stack": 64,
+    "maxFileMB": 15,
+    "maxWork": 1024
+  },
+  "pricing": {
+    "profitPct": 5,
+    "minProfit": 5000000,
+    "internalDiscPct": 10,
+    "customerDiscPct": 8,
+    "round": 1000000,
+    "rndMin": 60000,
+    "rndMax": 190000,
+    "complexityTiers": [
+      {
+        "max": 5,
+        "extra": 0
+      },
+      {
+        "max": 10,
+        "extra": 1000000
+      },
+      {
+        "max": 18,
+        "extra": 7000000
+      },
+      {
+        "max": 30,
+        "extra": 14000000
+      },
+      {
+        "max": 50,
+        "extra": 30000000
+      },
+      {
+        "max": null,
+        "extra": 75000000
+      }
+    ]
+  },
+  "dither": {
+    "errorStrength": 50,
+    "errorClamp": 96
+  },
+  "codeVersion": 2,
+  "budget": {
+    "dropCostBias": 1000000,
+    "minBlocks": 2,
+    "histShift": 5,
+    "maxSteps": 20,
+    "minBlockShare": 0.02,
+    "compareBlur": 1
+  }
+}

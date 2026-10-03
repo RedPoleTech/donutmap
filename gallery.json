@@ -1,0 +1,22 @@
+{
+    "maps": [
+        {
+            "image": "gallery/bobsponge.png",
+            "title": "Spongebob",
+            "description": "One customer wanted this spongebob Build.",
+            "info": "Built on DonutSMP in 2 days"
+        },
+        {
+            "image": "gallery/drachenlord mapart.png",
+            "title": "Rainer Winkler",
+            "description": "Germans know this guy.",
+            "info": "Built on DonutSMP in 3 days"
+        },
+        {
+            "image": "gallery/Mapart2.png",
+            "title": "Face in the Dark",
+            "description": "Also a classic meme.",
+            "info": "Built on DonutSMP in 5 hours"
+        }
+    ]
+}
